@@ -1,0 +1,34 @@
+{
+	"name": "respawn-social-backend",
+	"version": "0.1.0",
+	"exports": "./src/index.ts",
+
+	"//": "Deno tasks. Run with `deno task <name>`. The permission flags are Deno's security model: a script can only touch the network/env/filesystem you explicitly grant.",
+	"tasks": {
+		"dev": "deno run --watch --env-file --allow-net --allow-env --allow-read --allow-sys src/index.ts",
+		"start": "deno run --env-file --allow-net --allow-env --allow-read --allow-sys src/index.ts",
+		"typecheck": "deno check src/index.ts",
+		"lint": "deno run -A npm:oxlint",
+		"format": "deno run -A npm:oxfmt",
+		"db:generate": "deno run -A npm:drizzle-kit generate",
+		"db:migrate": "deno run --env-file --allow-net --allow-env --allow-read --allow-sys src/db/migrate.ts",
+		"db:studio": "deno run -A npm:drizzle-kit studio"
+	},
+
+	"//nodeModulesDir": "Use a real node_modules dir populated from package.json. Lets us keep bare npm imports (e.g. `from \"hono\"`) and our existing package.json deps.",
+	"nodeModulesDir": "auto",
+
+	"//unstable": "sloppy-imports lets us keep Node-style `./foo.js` import specifiers that actually point at `./foo.ts` (Deno is normally strict about extensions). This is what allows the existing import style to run unchanged.",
+	"unstable": ["sloppy-imports"],
+
+	"//compilerOptions": "Deno supplies its own lib types; we add DOM for fetch/URL/Request types used by Hono, and keep strictness on.",
+	"compilerOptions": {
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"lib": ["deno.window", "dom", "dom.iterable", "esnext"]
+	},
+
+	"//exclude": "Keep Deno's own tooling from scanning build/vendor dirs.",
+	"exclude": ["node_modules", "drizzle"]
+}

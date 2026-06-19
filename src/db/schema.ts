@@ -1,0 +1,90 @@
+import { bigint, index, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
+
+/**
+ * Database schema (Drizzle).
+ *
+ * Backend concept: this file is the single source of truth for our tables.
+ * `deno task db:generate` diffs this against the last migration and writes SQL to
+ * ./drizzle; `deno task db:migrate` applies that SQL to Postgres. We never hand-edit
+ * the database — we edit this file and regenerate.
+ */
+
+/**
+ * The IGDB game mirror.
+ *
+ * This is the heart of the "don't hammer IGDB" strategy. Every game we fetch
+ * gets upserted here keyed by its IGDB id. Future reads come from THIS table,
+ * not IGDB. `fetched_at` lets us know when a row is stale enough to refresh;
+ * `checksum` is IGDB's own change-hash so we can detect if anything changed.
+ */
+export const games = pgTable('games', {
+	// IGDB's numeric id is our primary key (not an auto-generated one).
+	id: bigint('id', { mode: 'number' }).primaryKey(),
+	// The full IGDB JSON payload, stored verbatim. jsonb = queryable JSON.
+	payload: jsonb('payload').notNull(),
+	// IGDB's change-detection hash (uuid string).
+	checksum: text('checksum'),
+	// When we last pulled this from IGDB (drives stale-while-revalidate).
+	fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Cached search results.
+ *
+ * Searches are the risky, high-volume case. We cache them keyed by the
+ * normalized query string. Short TTL (search results change more than a single
+ * game's details). `expires_at` is checked on read.
+ */
+export const searchCache = pgTable('search_cache', {
+	// The normalized query string (lowercased/trimmed) is the key.
+	query: text('query').primaryKey(),
+	// Array of game results (JSON).
+	results: jsonb('results').notNull(),
+	fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+	expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+})
+
+/**
+ * The Twitch/IGDB OAuth token (single row).
+ *
+ * IGDB auth gives us one app-level access token that lasts ~weeks. We persist
+ * it so a server restart doesn't force a fresh token fetch. Only ever one row
+ * (id = "igdb").
+ */
+export const oauthToken = pgTable('oauth_token', {
+	id: text('id').primaryKey(), // always "igdb"
+	accessToken: text('access_token').notNull(),
+	// When the token becomes invalid (so we refresh slightly before).
+	expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+})
+
+/**
+ * AT Protocol OAuth — transient "state" store.
+ *
+ * Backend concept: OAuth is a multi-step redirect dance. Between "user clicks
+ * login" and "user comes back from their PDS", we must remember some per-request
+ * data (PKCE verifier, DPoP key, etc). The AT Proto client hands us a key+value
+ * to stash; we give it back on return. Short-lived rows.
+ */
+export const atprotoAuthState = pgTable('atproto_auth_state', {
+	key: text('key').primaryKey(),
+	state: jsonb('state').notNull(),
+	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * AT Protocol OAuth — durable user sessions.
+ *
+ * Once a user logs in, the client stores their session (tokens + DPoP key) here
+ * keyed by their DID (their permanent AT Proto identifier). This is what lets us
+ * act on their behalf (e.g. write a game post to their PDS) on later requests.
+ */
+export const atprotoSession = pgTable(
+	'atproto_session',
+	{
+		did: text('did').primaryKey(),
+		session: jsonb('session').notNull(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+	},
+	(t) => [index('atproto_session_updated_idx').on(t.updatedAt)],
+)
