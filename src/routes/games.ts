@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { getGame, searchGames } from '../igdb/data.js'
+import { getGame, getGameBySlug, searchGames } from '../igdb/data.js'
 import { logger } from '../logger.js'
 
 /**
@@ -32,6 +32,26 @@ gamesRoutes.get('/search', async (c) => {
 	} catch (err) {
 		logger.error(err, 'search failed')
 		return c.json({ error: 'Failed to search games' }, 502)
+	}
+})
+
+// GET /games/slug/:slug
+// (defined before /:id so "slug" isn't captured as an id)
+const slugSchema = z.string().min(1).max(120).regex(/^[a-z0-9-]+$/, 'invalid slug')
+
+gamesRoutes.get('/slug/:slug', async (c) => {
+	const parsed = slugSchema.safeParse(c.req.param('slug'))
+	if (!parsed.success) {
+		return c.json({ error: 'invalid slug' }, 400)
+	}
+
+	try {
+		const game = await getGameBySlug(parsed.data)
+		if (!game) return c.json({ error: 'Game not found' }, 404)
+		return c.json({ game })
+	} catch (err) {
+		logger.error(err, `getGameBySlug(${parsed.data}) failed`)
+		return c.json({ error: 'Failed to fetch game' }, 502)
 	}
 })
 

@@ -20,6 +20,9 @@ import { bigint, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
 export const games = pgTable('games', {
 	// IGDB's numeric id is our primary key (not an auto-generated one).
 	id: bigint('id', { mode: 'number' }).primaryKey(),
+	// IGDB's URL slug (e.g. "horizon-zero-dawn"). Unique per game; used to look
+	// up games by their human-readable URL segment. Mirrored from payload.slug.
+	slug: text('slug').unique(),
 	// The full IGDB JSON payload, stored verbatim. jsonb = queryable JSON.
 	payload: jsonb('payload').notNull(),
 	// IGDB's change-detection hash (uuid string).

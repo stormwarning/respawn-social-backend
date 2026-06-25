@@ -34,6 +34,7 @@ const GAME_FIELDS =
 export interface IgdbGame {
 	id: number
 	name?: string
+	slug?: string
 	checksum?: string
 	[key: string]: unknown
 }
@@ -46,24 +47,48 @@ function isFresh(fetchedAt: Date, ttlMs: number): boolean {
 	return Date.now() - fetchedAt.getTime() < ttlMs
 }
 
-/** Pull a single game from IGDB and upsert it into the mirror. */
+/** Map an IGDB game payload to a `games` table row. */
+function toGameRow(game: IgdbGame) {
+	return {
+		id: game.id,
+		slug: game.slug ?? null,
+		payload: game,
+		checksum: game.checksum ?? null,
+	}
+}
+
+/** Upsert a game into the mirror, keyed by IGDB id. */
+async function upsertGame(game: IgdbGame): Promise<void> {
+	const row = toGameRow(game)
+	await db
+		.insert(games)
+		.values(row)
+		.onConflictDoUpdate({
+			target: games.id,
+			set: { slug: row.slug, payload: row.payload, checksum: row.checksum, fetchedAt: new Date() },
+		})
+}
+
+/** Pull a single game from IGDB (by id) and upsert it into the mirror. */
 async function fetchAndStoreGame(id: number): Promise<IgdbGame | null> {
 	const rows = await igdbRequest<IgdbGame[]>('games', `fields ${GAME_FIELDS}; where id = ${id};`)
 	const game = rows[0]
 	if (!game) return null
+	await upsertGame(game)
+	return game
+}
 
-	await db
-		.insert(games)
-		.values({
-			id: game.id,
-			payload: game,
-			checksum: game.checksum ?? null,
-		})
-		.onConflictDoUpdate({
-			target: games.id,
-			set: { payload: game, checksum: game.checksum ?? null, fetchedAt: new Date() },
-		})
-
+/** Pull a single game from IGDB (by slug) and upsert it into the mirror. */
+async function fetchAndStoreGameBySlug(slug: string): Promise<IgdbGame | null> {
+	// Escape double-quotes to keep the apicalypse query well-formed.
+	const safe = slug.replace(/"/g, '\\"')
+	const rows = await igdbRequest<IgdbGame[]>(
+		'games',
+		`fields ${GAME_FIELDS}; where slug = "${safe}";`,
+	)
+	const game = rows[0]
+	if (!game) return null
+	await upsertGame(game)
 	return game
 }
 
@@ -87,6 +112,29 @@ export async function getGame(id: number): Promise<IgdbGame | null> {
 
 	// Cold miss: must fetch. Deduped so concurrent callers share one IGDB request.
 	return gameFlight.run(`game:${id}`, () => fetchAndStoreGame(id))
+}
+
+/**
+ * Get a game by its IGDB slug, served from cache when possible. Mirrors
+ * getGame()'s stale-while-revalidate logic but keys lookups on the slug column.
+ */
+export async function getGameBySlug(slug: string): Promise<IgdbGame | null> {
+	const row = await db.query.games.findFirst({ where: eq(games.slug, slug) })
+
+	if (row) {
+		const cached = row.payload as IgdbGame
+		if (isFresh(row.fetchedAt, GAME_TTL_MS)) {
+			return cached // fresh hit — no IGDB call
+		}
+		// Stale: serve now, refresh in the background (stale-while-revalidate).
+		void gameFlight
+			.run(`slug:${slug}`, () => fetchAndStoreGameBySlug(slug))
+			.catch((err) => logger.error(err, `Background refresh failed for game slug ${slug}`))
+		return cached
+	}
+
+	// Cold miss: must fetch. Deduped so concurrent callers share one IGDB request.
+	return gameFlight.run(`slug:${slug}`, () => fetchAndStoreGameBySlug(slug))
 }
 
 /** Normalize a search query so "Zelda " and "zelda" share a cache entry. */
@@ -125,7 +173,7 @@ async function fetchAndStoreSearch(normalized: string): Promise<IgdbGame[]> {
 	for (const game of results) {
 		void db
 			.insert(games)
-			.values({ id: game.id, payload: game, checksum: game.checksum ?? null })
+			.values(toGameRow(game))
 			.onConflictDoNothing()
 			.catch(() => {})
 	}
