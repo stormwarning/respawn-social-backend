@@ -31,5 +31,9 @@
 	},
 
 	"//exclude": "Keep Deno's own tooling from scanning build/vendor dirs.",
-	"exclude": ["node_modules", "drizzle"]
+	"exclude": ["node_modules", "drizzle"],
+
+	"lint": {
+		"exclude": ["**/*.ts"]
+	}
 }
